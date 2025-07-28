@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(CGO_ENABLED=1 go build -o test_order example_order_test.go)",
+      "Bash(go build:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)"
+    ],
+    "deny": []
+  }
+}
