@@ -66,6 +66,7 @@ func addOrUpdateMenuItem(item *MenuItem) {
 		disabled,
 		checked,
 		isCheckable,
+		C.int(item.order),
 	)
 }
 
@@ -81,6 +82,12 @@ func hideMenuItem(item *MenuItem) {
 
 func showMenuItem(item *MenuItem) {
 	C.show_menu_item(
+		C.int(item.id),
+	)
+}
+
+func deleteMenuItem(item *MenuItem) {
+	C.delete_menu_item(
 		C.int(item.id),
 	)
 }

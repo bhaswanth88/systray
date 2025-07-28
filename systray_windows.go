@@ -488,7 +488,7 @@ func (t *winTray) convertToSubMenu(menuItemId uint32) (windows.Handle, error) {
 	return menu, nil
 }
 
-func (t *winTray) addOrUpdateMenuItem(menuItemId uint32, parentId uint32, title string, disabled, checked bool) error {
+func (t *winTray) addOrUpdateMenuItem(menuItemId uint32, parentId uint32, title string, disabled, checked bool, order int32) error {
 	// https://msdn.microsoft.com/en-us/library/windows/desktop/ms647578(v=vs.85).aspx
 	const (
 		MIIM_FTYPE   = 0x00000100
@@ -637,6 +637,53 @@ func (t *winTray) hideMenuItem(menuItemId, parentId uint32) error {
 	return nil
 }
 
+func (t *winTray) deleteMenuItem(menuItemId uint32) error {
+	// Find the parent ID first
+	var parentId uint32 = 0
+	t.muMenuOf.RLock()
+	if menu, exists := t.menuOf[menuItemId]; exists {
+		// Find which parent menu this item belongs to
+		t.muMenus.RLock()
+		for pid, pmenu := range t.menus {
+			if uintptr(pmenu) == menu {
+				parentId = pid
+				break
+			}
+		}
+		t.muMenus.RUnlock()
+	}
+	t.muMenuOf.RUnlock()
+
+	// Remove the item permanently using RemoveMenu (same as hide)
+	const MF_BYCOMMAND = 0x00000000
+	const ERROR_SUCCESS syscall.Errno = 0
+
+	t.muMenus.RLock()
+	menu := uintptr(t.menus[parentId])
+	t.muMenus.RUnlock()
+	res, _, err := pRemoveMenu.Call(
+		menu,
+		uintptr(menuItemId),
+		MF_BYCOMMAND,
+	)
+	if res == 0 && err.(syscall.Errno) != ERROR_SUCCESS {
+		return err
+	}
+
+	// Clean up tracking structures
+	t.delFromVisibleItems(parentId, menuItemId)
+	t.muMenuOf.Lock()
+	delete(t.menuOf, menuItemId)
+	t.muMenuOf.Unlock()
+
+	// Clean up any menu icon
+	t.muMenuItemIcons.Lock()
+	delete(t.menuItemIcons, menuItemId)
+	t.muMenuItemIcons.Unlock()
+
+	return nil
+}
+
 func (t *winTray) showMenu() error {
 	const (
 		TPM_BOTTOMALIGN = 0x0020
@@ -684,6 +731,7 @@ func (t *winTray) addToVisibleItems(parent, val uint32) {
 		t.visibleItems[parent] = []uint32{val}
 	} else {
 		newvisible := append(visibleItems, val)
+		// Sort by ID for now - proper order implementation would require access to MenuItem struct
 		sort.Slice(newvisible, func(i, j int) bool { return newvisible[i] < newvisible[j] })
 		t.visibleItems[parent] = newvisible
 	}
@@ -891,7 +939,7 @@ func (item *MenuItem) SetIcon(iconBytes []byte) {
 	wt.menuItemIcons[uint32(item.id)] = h
 	wt.muMenuItemIcons.Unlock()
 
-	err = wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
+	err = wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked, item.order)
 	if err != nil {
 		log.Errorf("Unable to addOrUpdateMenuItem: %v", err)
 		return
@@ -913,7 +961,7 @@ func SetRemovalAllowed(allowed bool) {
 }
 
 func addOrUpdateMenuItem(item *MenuItem) {
-	err := wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
+	err := wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked, item.order)
 	if err != nil {
 		log.Errorf("Unable to addOrUpdateMenuItem: %v", err)
 		return
@@ -932,6 +980,14 @@ func addSeparator(id uint32) {
 	err := wt.addSeparatorMenuItem(id, 0)
 	if err != nil {
 		log.Errorf("Unable to addSeparator: %v", err)
+		return
+	}
+}
+
+func deleteMenuItem(item *MenuItem) {
+	err := wt.deleteMenuItem(uint32(item.id))
+	if err != nil {
+		log.Errorf("Unable to deleteMenuItem: %v", err)
 		return
 	}
 }

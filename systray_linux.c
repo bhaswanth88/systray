@@ -30,6 +30,7 @@ typedef struct {
 	short disabled;
 	short checked;
 	short isCheckable;
+	int order;
 } MenuItemInfo;
 
 void registerSystray(void) {
@@ -142,7 +143,12 @@ gboolean do_add_or_update_menu_item(gpointer data) {
 		);
 
 		if (mii->parent_menu_id == 0) {
-			gtk_menu_shell_append(GTK_MENU_SHELL(global_tray_menu), menu_item);
+			// Calculate position based on order
+			int position = (mii->order <= 0) ? 0 : mii->order;
+			// Clamp position to valid range
+			int max_pos = gtk_menu_shell_get_n_children(GTK_MENU_SHELL(global_tray_menu));
+			if (position > max_pos) position = max_pos;
+			gtk_menu_shell_insert(GTK_MENU_SHELL(global_tray_menu), menu_item, position);
 		} else {
 			GtkMenuItem* parentMenuItem = find_menu_by_id(mii->parent_menu_id);
 			GtkWidget* parentMenu = gtk_menu_item_get_submenu(parentMenuItem);
@@ -152,7 +158,11 @@ gboolean do_add_or_update_menu_item(gpointer data) {
 				gtk_menu_item_set_submenu(parentMenuItem, parentMenu);
 			}
 
-			gtk_menu_shell_append(GTK_MENU_SHELL(parentMenu), menu_item);
+			// Calculate position based on order for submenu
+			int position = (mii->order <= 0) ? 0 : mii->order;
+			int max_pos = gtk_menu_shell_get_n_children(GTK_MENU_SHELL(parentMenu));
+			if (position > max_pos) position = max_pos;
+			gtk_menu_shell_insert(GTK_MENU_SHELL(parentMenu), menu_item, position);
 		}
 
 		MenuItemNode* new_item = malloc(sizeof(MenuItemNode));
@@ -214,6 +224,40 @@ gboolean do_show_menu_item(gpointer data) {
 }
 
 // runs in main thread, should always return FALSE to prevent gtk to execute it again
+gboolean do_delete_menu_item(gpointer data) {
+	MenuItemInfo *mii = (MenuItemInfo*)data;
+	GList* it;
+	GList* prev = NULL;
+	for(it = global_menu_items; it != NULL; prev = it, it = it->next) {
+		MenuItemNode* item = (MenuItemNode*)(it->data);
+		if(item->menu_id == mii->menu_id){
+			// Remove from GTK menu
+			GtkWidget* parent = gtk_widget_get_parent(GTK_WIDGET(item->menu_item));
+			if (parent != NULL) {
+				gtk_container_remove(GTK_CONTAINER(parent), GTK_WIDGET(item->menu_item));
+			}
+			
+			// Remove from our list
+			if (prev != NULL) {
+				prev->next = it->next;
+			} else {
+				global_menu_items = it->next;
+			}
+			if (it->next != NULL) {
+				it->next->prev = prev;
+			}
+			
+			// Free memory
+			free(item);
+			free(it);
+			break;
+		}
+	}
+	free(mii);
+	return FALSE;
+}
+
+// runs in main thread, should always return FALSE to prevent gtk to execute it again
 gboolean do_quit(gpointer data) {
 	_unlink_temp_file();
 	// app indicator doesn't provide a way to remove it, hide it as a workaround
@@ -240,7 +284,7 @@ void setTooltip(char* ctooltip) {
 void setMenuItemIcon(const char* iconBytes, int length, int menuId, bool template) {
 }
 
-void add_or_update_menu_item(int menu_id, int parent_menu_id, char* title, char* tooltip, short disabled, short checked, short isCheckable) {
+void add_or_update_menu_item(int menu_id, int parent_menu_id, char* title, char* tooltip, short disabled, short checked, short isCheckable, int order) {
 	MenuItemInfo *mii = malloc(sizeof(MenuItemInfo));
 	mii->menu_id = menu_id;
 	mii->parent_menu_id = parent_menu_id;
@@ -249,6 +293,7 @@ void add_or_update_menu_item(int menu_id, int parent_menu_id, char* title, char*
 	mii->disabled = disabled;
 	mii->checked = checked;
 	mii->isCheckable = isCheckable;
+	mii->order = order;
 	g_idle_add(do_add_or_update_menu_item, mii);
 }
 
@@ -268,6 +313,12 @@ void show_menu_item(int menu_id) {
 	MenuItemInfo *mii = malloc(sizeof(MenuItemInfo));
 	mii->menu_id = menu_id;
 	g_idle_add(do_show_menu_item, mii);
+}
+
+void delete_menu_item(int menu_id) {
+	MenuItemInfo *mii = malloc(sizeof(MenuItemInfo));
+	mii->menu_id = menu_id;
+	g_idle_add(do_delete_menu_item, mii);
 }
 
 void quit() {
