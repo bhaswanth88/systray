@@ -20,8 +20,9 @@ var (
 	menuItems     = make(map[uint32]*MenuItem)
 	menuItemsLock sync.RWMutex
 
-	currentID = uint32(0)
-	quitOnce  sync.Once
+	currentID    = uint32(0)
+	currentOrder = int32(0)
+	quitOnce     sync.Once
 )
 
 func init() {
@@ -48,6 +49,8 @@ type MenuItem struct {
 	isCheckable bool
 	// parent item, for sub menus
 	parent *MenuItem
+	// order determines the position of the menu item, lower values appear first
+	order int32
 }
 
 func (item *MenuItem) String() string {
@@ -68,6 +71,7 @@ func newMenuItem(title string, tooltip string, parent *MenuItem) *MenuItem {
 		checked:     false,
 		isCheckable: false,
 		parent:      parent,
+		order:       atomic.AddInt32(&currentOrder, 1),
 	}
 }
 
@@ -127,6 +131,28 @@ func AddMenuItemCheckbox(title string, tooltip string, checked bool) *MenuItem {
 	item := newMenuItem(title, tooltip, nil)
 	item.isCheckable = true
 	item.checked = checked
+	item.update()
+	return item
+}
+
+// AddMenuItemAtIndex adds a menu item at a specific position with the designated title and tooltip.
+// It can be safely invoked from different goroutines.
+// Created menu items are checkable on Windows and OSX by default. For Linux you have to use AddMenuItemCheckboxAtIndex
+func AddMenuItemAtIndex(title string, tooltip string, index int32) *MenuItem {
+	item := newMenuItem(title, tooltip, nil)
+	item.order = index
+	item.update()
+	return item
+}
+
+// AddMenuItemCheckboxAtIndex adds a menu item at a specific position with the designated title and tooltip and a checkbox for Linux.
+// It can be safely invoked from different goroutines.
+// On Windows and OSX this is the same as calling AddMenuItemAtIndex
+func AddMenuItemCheckboxAtIndex(title string, tooltip string, checked bool, index int32) *MenuItem {
+	item := newMenuItem(title, tooltip, nil)
+	item.isCheckable = true
+	item.checked = checked
+	item.order = index
 	item.update()
 	return item
 }
@@ -210,6 +236,93 @@ func (item *MenuItem) Check() {
 func (item *MenuItem) Uncheck() {
 	item.checked = false
 	item.update()
+}
+
+// SetOrder sets the order/position of the menu item
+func (item *MenuItem) SetOrder(order int32) {
+	item.order = order
+	item.update()
+}
+
+// GetOrder returns the current order/position of the menu item
+func (item *MenuItem) GetOrder() int32 {
+	return item.order
+}
+
+// Delete removes the menu item permanently from the system tray
+func (item *MenuItem) Delete() {
+	menuItemsLock.Lock()
+	delete(menuItems, item.id)
+	menuItemsLock.Unlock()
+	deleteMenuItem(item)
+}
+
+// ReorderMenuItems reorders multiple menu items at once
+// items: slice of MenuItems to reorder
+// startOrder: starting order value (items will be ordered sequentially from this value)
+func ReorderMenuItems(items []*MenuItem, startOrder int32) {
+	for i, item := range items {
+		item.SetOrder(startOrder + int32(i))
+	}
+}
+
+// SwapMenuItems swaps the order of two menu items
+func SwapMenuItems(item1, item2 *MenuItem) {
+	order1 := item1.GetOrder()
+	order2 := item2.GetOrder()
+	item1.SetOrder(order2)
+	item2.SetOrder(order1)
+}
+
+// MoveMenuItemBefore moves a menu item to appear before another item
+func MoveMenuItemBefore(itemToMove, targetItem *MenuItem) {
+	targetOrder := targetItem.GetOrder()
+	itemToMove.SetOrder(targetOrder - 1)
+	
+	// Adjust other items if needed to prevent conflicts
+	adjustMenuItemOrders(targetOrder - 1, itemToMove.id)
+}
+
+// MoveMenuItemAfter moves a menu item to appear after another item
+func MoveMenuItemAfter(itemToMove, targetItem *MenuItem) {
+	targetOrder := targetItem.GetOrder()
+	itemToMove.SetOrder(targetOrder + 1)
+	
+	// Adjust other items if needed to prevent conflicts
+	adjustMenuItemOrders(targetOrder + 1, itemToMove.id)
+}
+
+// adjustMenuItemOrders adjusts orders of other items to prevent conflicts
+func adjustMenuItemOrders(newOrder int32, excludeID uint32) {
+	menuItemsLock.RLock()
+	defer menuItemsLock.RUnlock()
+	
+	for _, item := range menuItems {
+		if item.id != excludeID && item.order >= newOrder {
+			item.order = item.order + 1
+			item.update()
+		}
+	}
+}
+
+// GetAllMenuItems returns all current menu items
+func GetAllMenuItems() []*MenuItem {
+	menuItemsLock.RLock()
+	defer menuItemsLock.RUnlock()
+	
+	items := make([]*MenuItem, 0, len(menuItems))
+	for _, item := range menuItems {
+		items = append(items, item)
+	}
+	return items
+}
+
+// ClearAllMenuItems removes all menu items from the system tray
+func ClearAllMenuItems() {
+	items := GetAllMenuItems()
+	for _, item := range items {
+		item.Delete()
+	}
 }
 
 // update propagates changes on a menu item to systray

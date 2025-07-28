@@ -22,13 +22,15 @@
     NSString* tooltip;
     short disabled;
     short checked;
+    int order;
 }
 -(id) initWithId: (int)theMenuId
 withParentMenuId: (int)theParentMenuId
        withTitle: (const char*)theTitle
      withTooltip: (const char*)theTooltip
     withDisabled: (short)theDisabled
-     withChecked: (short)theChecked;
+     withChecked: (short)theChecked
+       withOrder: (int)theOrder;
      @end
      @implementation MenuItem
      -(id) initWithId: (int)theMenuId
@@ -37,6 +39,7 @@ withParentMenuId: (int)theParentMenuId
           withTooltip: (const char*)theTooltip
          withDisabled: (short)theDisabled
           withChecked: (short)theChecked
+            withOrder: (int)theOrder
 {
   menuId = [NSNumber numberWithInt:theMenuId];
   parentMenuId = [NSNumber numberWithInt:theParentMenuId];
@@ -46,6 +49,7 @@ withParentMenuId: (int)theParentMenuId
                                      encoding:NSUTF8StringEncoding];
   disabled = theDisabled;
   checked = theChecked;
+  order = theOrder;
   return self;
 }
 @end
@@ -144,10 +148,42 @@ withParentMenuId: (int)theParentMenuId
   NSMenuItem *menuItem;
   menuItem = find_menu_item(theMenu, item->menuId);
   if (menuItem == NULL) {
-    menuItem = [theMenu addItemWithTitle:item->title
-                               action:@selector(menuHandler:)
-                        keyEquivalent:@""];
+    menuItem = [[NSMenuItem alloc] initWithTitle:item->title
+                                          action:@selector(menuHandler:)
+                                   keyEquivalent:@""];
     [menuItem setRepresentedObject:item->menuId];
+    
+    // Calculate insertion index based on order
+    NSInteger insertIndex = 0;
+    NSArray *existingItems = [theMenu itemArray];
+    for (NSInteger i = 0; i < [existingItems count]; i++) {
+      NSMenuItem *existingItem = [existingItems objectAtIndex:i];
+      // Skip separators (they don't have representedObject)
+      if ([existingItem representedObject] == nil && ![existingItem isSeparatorItem]) {
+        continue;
+      }
+      // For separator items, we'll assume they maintain their position
+      if ([existingItem isSeparatorItem]) {
+        insertIndex = i + 1;
+        continue;
+      }
+      
+      // For regular menu items, we assume they are ordered by their creation order
+      // Since we can't easily retrieve the original order, we'll append at the end
+      insertIndex = i + 1;
+    }
+    
+    // For simplicity, if order is specified as 0 or negative, insert at the beginning
+    if (item->order <= 0) {
+      insertIndex = 0;
+    }
+    
+    // Clamp insertIndex to valid range
+    if (insertIndex > [theMenu numberOfItems]) {
+      insertIndex = [theMenu numberOfItems];
+    }
+    
+    [theMenu insertItem:menuItem atIndex:insertIndex];
   }
   [menuItem setTitle:item->title];
   [menuItem setTag:[item->menuId integerValue]];
@@ -215,6 +251,17 @@ NSMenuItem *find_menu_item(NSMenu *ourMenu, NSNumber *menuId) {
   NSMenuItem* menuItem = find_menu_item(menu, menuId);
   if (menuItem != NULL) {
     [menuItem setHidden:FALSE];
+  }
+}
+
+- (void) delete_menu_item:(NSNumber*) menuId
+{
+  NSMenuItem* menuItem = find_menu_item(menu, menuId);
+  if (menuItem != NULL) {
+    NSMenu* parentMenu = [menuItem menu];
+    if (parentMenu != NULL) {
+      [parentMenu removeItem:menuItem];
+    }
   }
 }
 
@@ -287,8 +334,8 @@ void setRemovalAllowed(bool allowed) {
   runInMainThread(@selector(setRemovalAllowed:), (id)allow);
 }
 
-void add_or_update_menu_item(int menuId, int parentMenuId, char* title, char* tooltip, short disabled, short checked, short isCheckable) {
-  MenuItem* item = [[MenuItem alloc] initWithId: menuId withParentMenuId: parentMenuId withTitle: title withTooltip: tooltip withDisabled: disabled withChecked: checked];
+void add_or_update_menu_item(int menuId, int parentMenuId, char* title, char* tooltip, short disabled, short checked, short isCheckable, int order) {
+  MenuItem* item = [[MenuItem alloc] initWithId: menuId withParentMenuId: parentMenuId withTitle: title withTooltip: tooltip withDisabled: disabled withChecked: checked withOrder: order];
   free(title);
   free(tooltip);
   runInMainThread(@selector(add_or_update_menu_item:), (id)item);
@@ -307,6 +354,11 @@ void hide_menu_item(int menuId) {
 void show_menu_item(int menuId) {
   NSNumber *mId = [NSNumber numberWithInt:menuId];
   runInMainThread(@selector(show_menu_item:), (id)mId);
+}
+
+void delete_menu_item(int menuId) {
+  NSNumber *mId = [NSNumber numberWithInt:menuId];
+  runInMainThread(@selector(delete_menu_item:), (id)mId);
 }
 
 void quit() {
