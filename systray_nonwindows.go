@@ -1,5 +1,5 @@
 // +build !windows
-// go:build !windows
+//go:build !windows
 
 package systray
 
